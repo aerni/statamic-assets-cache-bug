@@ -31,7 +31,7 @@ These exceptions make sense when you look at the asset container contents. You c
 
 The asset container contents are cached in the `all()` method of the `AssetContainerContents` class. When running a queue, this cache is used on subsequent calls to the method. 
 
-Now when an asset is saved, its path is added to the cached container contents in the `save()` method of the `AssetRepository` class.
+Now when an asset is saved in the `save()` method of the `AssetRepository` class, its path is added to the cached container contents. But when the `save()` method on the `AssetContainerContents` is called, the cached instance doesn't include the newly added path.
 
 ## How to fix it
 
