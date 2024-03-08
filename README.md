@@ -1,40 +1,63 @@
-<p align="center"><img src="https://statamic.com/assets/branding/Statamic-Logo+Wordmark-Rad.svg" width="400" alt="Statamic Logo" /></p>
+## Bug description
 
-## About Statamic
+The `AssetContainerContents` are not updated when creating an asset in a job. This results in the job failing. This bug sounds pretty similar to https://github.com/statamic/cms/issues/5501 and should have been closed by https://github.com/statamic/cms/pull/6726.
 
-Statamic is the flat-first, Laravel + Git powered CMS designed for building beautiful, easy to manage websites.
+## Environment
 
-> **Note:** This repository contains the code for the Statamic application. To contribute to the core package, visit the [Statamic core package repository][cms-repo].
+```env
+STATAMIC_STACHE_WATCHER=false
+QUEUE_CONNECTION=redis
+```
 
+Also, make sure to create and migrate a database so that failed jobs can be logged.
 
-## Learning Statamic
+## How to reproduce
 
-Statamic has extensive [documentation][docs]. We dedicate a significant amount of time and energy every day to improving them, so if something is unclear, feel free to open issues for anything you find confusing or incomplete. We are happy to consider anything you feel will make the docs and CMS better.
+1. Create a user
+3. Run `php artisan queue:work` in your terminal
+2. Login to the CP, go to the pages collection, and switch to the list view
+4. Open the contextual menu of an entry and run the `Import Data` action
 
-## Support
+You should now see the `App\Actions\ImportImage` and `Statamic\Listeners\GeneratePresetImageManipulations` jobs fail:
 
-We provide official developer support on [Statamic Pro](https://statamic.com/pricing) projects. Community-driven support is available on the [forum](https://statamic.com/forum) and in [Discord][discord].
+<img width="2056" alt="CleanShot 2024-03-08 at 12 24 59@2x" src="https://github.com/aerni/statamic-assets-cache-bug/assets/23167701/54255e77-df6f-4316-8306-213e613a95aa">
+<img width="1557" alt="CleanShot 2024-03-08 at 12 22 17@2x" src="https://github.com/aerni/statamic-assets-cache-bug/assets/23167701/b04d21eb-be72-4f73-a457-09e597bd258b">
 
+## What's going on
 
-## Contributing
+These exceptions make sense when you look at the asset container contents. You can confirm that the newly created asset is missing from the list by opening up a Tinkerwell session and getting the contents of the asset container.
 
-Thank you for considering contributing to Statamic! We simply ask that you review the [contribution guide][contribution] before you open issues or send pull requests.
+<img width="577" alt="CleanShot 2024-03-08 at 12 41 13@2x" src="https://github.com/aerni/statamic-assets-cache-bug/assets/23167701/d4a25901-0e53-421b-a9af-e33676b67730">
 
+The asset container contents are cached in the `all()` method of the `AssetContainerContents` class. When running a queue, this cache is used on subsequent calls to the method. 
 
-## Code of Conduct
+Now when an asset is saved, its path is added to the cached container contents in the `save()` method of the `AssetRepository` class.
 
-In order to ensure that the Statamic community is welcoming to all and generally a rad place to belong, please review and abide by the [Code of Conduct](https://github.com/statamic/cms/wiki/Code-of-Conduct).
+## How to fix it
 
+There seems to be an easy fix by explicitly adding the new path to the cache:
 
-## Important Links
+```diff
+public function add($path)
+{
+    if (! $metadata = $this->getNormalizedFlysystemMetadata($path)) {
+        return $this;
+    }
 
-- [Statamic Main Site](https://statamic.com)
-- [Statamic Documentation][docs]
-- [Statamic Core Package Repo][cms-repo]
-- [Statamic Migrator](https://github.com/statamic/migrator)
-- [Statamic Discord][discord]
+    // Add parent directories
+    if (($dir = dirname($path)) !== '.') {
+        $this->add($dir);
+    }
 
-[docs]: https://statamic.dev/
-[discord]: https://statamic.com/discord
-[contribution]: https://github.com/statamic/cms/blob/master/CONTRIBUTING.md
-[cms-repo]: https://github.com/statamic/cms
+-    $this->all()->put($path, $metadata);
++    $files = $this->all()->put($path, $metadata);
++
++    if (Statamic::isWorker()) {
++        Cache::put($this->key(), $files, $this->ttl());
++    }
+
+    $this->filteredFiles = null;
+    $this->filteredDirectories = null;
+
+    return $this;
+}
